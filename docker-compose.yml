@@ -1,0 +1,58 @@
+services:
+  ml:
+    build: ./intelvestor-ml
+    env_file:
+      - intelvestor-ml/.env
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    networks:
+      - app-network
+  backend:
+    build: ./intelvestor-backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      ml:
+        condition: service_healthy
+    env_file:
+      - intelvestor-backend/.env
+    environment:
+      - ML_SERVICE_URL=http://ml:8000
+      - SPRING_BOOT_LOG_LEVEL=DEBUG
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    networks:
+      - app-network
+  frontend:
+    build: ./intelvestor-frontend
+    env_file:
+      - intelvestor-frontend/.env
+    ports:
+      - "3000:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - VITE_CLERK_PUBLISHABLE_KEY=pk_test_bmF0aXZlLWRydW0tOTcuY2xlcmsuYWNjb3VudHMuZGV2JA
+      - VITE_BACKEND_URL=http://localhost:8080
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - app-network
+networks:
+  app-network:
+    driver: bridge

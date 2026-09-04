@@ -1,0 +1,61 @@
+# Environment variables
+.env
+intelvestor-backend/.env
+intelvestor-ml/.env
+intelvestor-frontend/.env
+
+# Keep the .env.example template
+!.env.example
+
+# Java/Spring Boot (Backend)
+intelvestor-backend/target/
+intelvestor-backend/*.log
+# intelvestor-backend/.mvn/  # Commented out to allow tracking
+# intelvestor-backend/mvnw   # Commented out to allow tracking
+# intelvestor-backend/mvnw.cmd  # Commented out to allow tracking
+# intelvestor-backend/.mvn/wrapper/maven-wrapper.jar  # Commented out to allow tracking
+
+# Python/FastAPI (ML Microservice)
+intelvestor-ml/__pycache__/
+intelvestor-ml/*.pyc
+intelvestor-ml/*.pyo
+intelvestor-ml/*.pyd
+intelvestor-ml/.pytest_cache/
+intelvestor-ml/venv/
+intelvestor-ml/.env
+intelvestor-ml/*.log
+
+# React (Frontend)
+intelvestor-frontend/node_modules/
+intelvestor-frontend/build/
+intelvestor-frontend/.env.local
+intelvestor-frontend/.env.development.local
+intelvestor-frontend/.env.test.local
+intelvestor-frontend/.env.production.local
+intelvestor-frontend/*.log
+
+# Docker
+*.dockerignore
+docker-compose.override.yml
+*.tar.gz
+*.docker
+
+# MongoDB local data (for docker-compose)
+mongo-data/
+
+# IDE and Editor Files
+.idea/
+*.iml
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Miscellaneous
+*.bak
+*.swp
+*~
+*.log

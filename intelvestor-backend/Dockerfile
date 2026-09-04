@@ -1,0 +1,8 @@
+FROM eclipse-temurin:17-jdk
+WORKDIR /app
+COPY target/intelvestor-backend-0.0.1-SNAPSHOT.jar app.jar
+EXPOSE 8080
+ENV SPRING_DATA_MONGODB_URI=${SPRING_DATA_MONGODB_URI}
+ENV CLERK_SECRET_KEY=${CLERK_SECRET_KEY}
+ENV ML_SERVICE_URL=${ML_SERVICE_URL}
+CMD ["java", "-jar", "app.jar"]
