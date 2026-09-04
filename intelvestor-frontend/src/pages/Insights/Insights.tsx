@@ -9,7 +9,7 @@ const Insights = () => {
     scriptChart.async = true;
     scriptChart.onload = () => {
       if ((window as { TradingView?: unknown }).TradingView) {
-        new ((window as { TradingView: { widget: new (config: unknown) => unknown } }).TradingView.widget)({
+        new ((window as unknown as { TradingView: { widget: new (config: unknown) => unknown } }).TradingView.widget)({
           width: '100%',
           height: 500,
           symbol: 'BSE:RELIANCE',
