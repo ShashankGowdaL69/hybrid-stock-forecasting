@@ -16,7 +16,7 @@ const Footer: React.FC = () => {
           <div className="col-span-1 md:col-span-2">
             <div className="flex items-center mb-4">
               <span className="text-white font-bold text-xl">
-                IntelVestor <span className="text-blue-400">AI</span>
+                Hybrid <span className="text-blue-400">Forecasting</span>
               </span>
             </div>
             <p className="text-gray-300 mb-4 max-w-md">

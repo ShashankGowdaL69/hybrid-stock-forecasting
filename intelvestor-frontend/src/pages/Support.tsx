@@ -5,7 +5,7 @@ const Support: React.FC = () => {
         <h1 className="text-2xl font-bold mb-4 text-blue-400">Support</h1>
         <div className="rounded-2xl border border-gray-700 bg-gray-800 p-6 shadow-lg">
           <p className="text-lg">Contact support for assistance.</p>
-          <p className="mt-2">Email us at support@intelvestor.ai or use the live chat feature.</p>
+          <p className="mt-2">This section will contain project documentation and implementation notes as the framework develops.</p>
         </div>
       </div>
     </div>

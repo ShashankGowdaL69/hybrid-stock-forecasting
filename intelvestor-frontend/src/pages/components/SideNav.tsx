@@ -1,17 +1,11 @@
-import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { UserButton } from '@clerk/clerk-react';
 import {
-  LayoutGrid,
-  X,
-  LogOut,
-  ChevronRight,
-  Home,
-  Activity,
+  LayoutDashboard,
+  Database,
   LineChart,
-  PieChart,
-  Users,
-  HelpCircle,
+  MessageSquareText,
+  Brain,
+  X,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -21,88 +15,74 @@ interface SideNavProps {
 }
 
 const SideNav: React.FC<SideNavProps> = ({ isOpen, setIsOpen }) => {
-  const [currentTime, setCurrentTime] = useState('');
-
   const menuList = [
-    { id: 0, name: 'Home', icon: Home, path: '/' },
-    { id: 1, name: 'Insights', icon: LayoutGrid, path: '/insights' },
-    { id: 2, name: 'Sentiment Analysis', icon: Activity, path: '/sentiment' },
-    { id: 3, name: 'Predictions', icon: LineChart, path: '/predictions' },
-    { id: 4, name: 'Portfolio Analytics', icon: PieChart, path: '/portfolio' },
-    { id: 5, name: 'Social Insights', icon: Users, path: '/social' },
-    { id: 6, name: 'Support', icon: HelpCircle, path: '/support' },
+    { name: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+    { name: 'Market Data', icon: Database, path: '/market-data' },
+    { name: 'Forecast', icon: LineChart, path: '/forecast' },
+    { name: 'Sentiment', icon: MessageSquareText, path: '/sentiment' },
+    { name: 'Model Insights', icon: Brain, path: '/model-insights' },
   ];
-
-  useEffect(() => {
-    setCurrentTime(
-      new Date().toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        day: '2-digit',
-        month: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      })
-    );
-    const handleResize = () => setIsOpen(window.innerWidth > 768);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [setIsOpen]);
 
   return (
     <>
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden"
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 md:hidden"
           onClick={() => setIsOpen(false)}
         />
       )}
-      <motion.nav 
+
+      <motion.nav
         initial={{ x: -256 }}
         animate={{ x: isOpen ? 0 : -256 }}
         transition={{ duration: 0.3 }}
-        className={`fixed top-0 left-0 h-screen border-r border-gray-700 bg-gray-800 text-white z-50 w-64 md:w-64 flex flex-col overflow-hidden`}
+        className="fixed top-0 left-0 h-screen w-64 bg-slate-950 border-r border-slate-800 text-white z-50 flex flex-col"
       >
-        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <span className="text-xl font-bold text-blue-400">IntelVestor AI</span>
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">
+              Hybrid Forecasting
+            </h1>
+            <p className="text-xs text-slate-500 mt-1">
+              Forecasting Framework
+            </p>
           </div>
-          <button onClick={() => setIsOpen(false)} className="md:hidden text-gray-300">
-            <X size={24} />
+
+          <button
+            onClick={() => setIsOpen(false)}
+            className="md:hidden text-slate-400 hover:text-white"
+          >
+            <X size={20} />
           </button>
         </div>
-        <div className="flex-1 p-2 overflow-y-auto">
+
+        <div className="flex-1 p-3 space-y-1">
           {menuList.map((menu) => (
             <NavLink
-              key={menu.id}
+              key={menu.path}
               to={menu.path}
               onClick={() => window.innerWidth < 768 && setIsOpen(false)}
               className={({ isActive }) =>
-                `flex items-center justify-between p-3 rounded-lg transition-colors ${isActive ? 'bg-blue-900/50 text-blue-300' : 'text-gray-300 hover:bg-gray-700'}`
+                `flex items-center gap-3 px-3 py-3 rounded-lg text-sm transition-colors ${
+                  isActive
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                }`
               }
             >
-              {({ isActive }) => (
-                <>
-                  <div className="flex items-center gap-3">
-                    <menu.icon size={20} className="text-blue-400" />
-                    <span>{menu.name}</span>
-                  </div>
-                  {isActive && <ChevronRight size={16} className="text-blue-300" />}
-                </>
-              )}
+              <menu.icon size={19} />
+              <span>{menu.name}</span>
             </NavLink>
           ))}
         </div>
-        <div className="p-4 border-t border-gray-700 flex items-center gap-3">
-          <UserButton />
-          <div>
-            <p className="text-sm font-medium">Your Account</p>
-            <p className="text-xs text-gray-400">{currentTime}</p>
-          </div>
-          <button className="ml-auto text-gray-300 hover:text-white">
-            <LogOut size={20} />
-          </button>
+
+        <div className="p-4 border-t border-slate-800">
+          <p className="text-xs text-slate-500">
+            Hybrid forecasting using
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            ARIMA · LSTM · Sentiment
+          </p>
         </div>
       </motion.nav>
     </>
