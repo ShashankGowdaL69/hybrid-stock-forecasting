@@ -91,7 +91,7 @@ The dataset is split chronologically into training, validation, and test sets to
 
 ```text
 hybrid-stock-forecasting/
-├── intelvestor-ml/
+├── ml/
 │   ├── app/
 │   │   ├── main.py
 │   │   ├── predictor.py
@@ -102,10 +102,10 @@ hybrid-stock-forecasting/
 │   │
 │   └── requirements.txt
 │
-├── intelvestor-backend/
+├── backend/
 │   └── src/
 │
-├── intelvestor-frontend/
+├── frontend/
 │   ├── src/
 │   ├── package.json
 │   └── vite.config.ts
@@ -118,7 +118,7 @@ hybrid-stock-forecasting/
 
 ## Running the ML API
 
-From the `intelvestor-ml` directory:
+From the `ml` directory:
 
 ```bash
 source .venv/bin/activate
