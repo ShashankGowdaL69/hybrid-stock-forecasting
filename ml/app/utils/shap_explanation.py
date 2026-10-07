@@ -15,6 +15,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(
     api_key=GEMINI_API_KEY,
     http_options=types.HttpOptions(
+        timeout=30000,
         retry_options=types.HttpRetryOptions(
             attempts=0,
             http_status_codes=[999]
@@ -119,7 +120,7 @@ def generate_shap_explanation(
 
     try:
         response = client.interactions.create(
-            model="gemini-3.6-flash",
+            model="gemini-3.5-flash-lite",
             input=prompt
         )
 

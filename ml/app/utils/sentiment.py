@@ -1,5 +1,4 @@
 import os
-import statistics
 from urllib.parse import quote
 
 import feedparser
@@ -34,11 +33,9 @@ def compute_sentiment(symbol: str) -> dict:
          0 = neutral
         +1 = strongly positive
     """
-
     try:
         # Resolve the Indian stock ticker to its company name.
         ticker = yf.Ticker(f"{symbol}.NS")
-
         company_name = (
             ticker.info.get("longName")
             or ticker.info.get("shortName")
@@ -47,7 +44,6 @@ def compute_sentiment(symbol: str) -> dict:
 
         # Search Google News for the resolved company name.
         query = quote(f'"{company_name}"')
-
         rss_url = (
             f"https://news.google.com/rss/search"
             f"?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
@@ -78,39 +74,101 @@ def compute_sentiment(symbol: str) -> dict:
                 "trends": [],
             }
 
-        # Use article title + RSS summary as input to the
-        # financial sentiment model.
-        texts = [
-            entry.title
-            for entry in articles
-        ]
+        # Use both the headline and RSS summary when available.
+        # The headline remains the primary signal, while the summary
+        # gives the financial sentiment model additional context.
+        texts = []
+
+        for entry in articles:
+            title = entry.get("title", "").strip()
+            summary = entry.get("summary", "").strip()
+
+            if summary:
+                texts.append(f"{title}. {summary}")
+            else:
+                texts.append(title)
 
         sentiment_pipeline = pipeline(
             "sentiment-analysis",
             model=SENTIMENT_MODEL,
         )
 
-        results = sentiment_pipeline(texts)
+        results = sentiment_pipeline(
+            texts,
+            truncation=True,
+            max_length=512,
+        )
 
-        scores = []
+        # Convert each model prediction into a signed sentiment score.
+        #
+        # Positive  ->  +confidence
+        # Negative  ->  -confidence
+        # Neutral   ->   0
+        #
+        # Recency is then used as a mild weighting factor so newer
+        # financial news contributes slightly more than older news.
+        weighted_scores = []
+        weighted_values = []
 
-        for result in results:
+        import time
+        import math
+
+        current_time = time.time()
+
+        for entry, result in zip(articles, results):
             label = result["label"].lower()
             confidence = float(result["score"])
 
             if label == "positive":
-                scores.append(confidence)
-
+                sentiment = confidence
             elif label == "negative":
-                scores.append(-confidence)
-
+                sentiment = -confidence
             else:
-                scores.append(0.0)
+                sentiment = 0.0
 
-        aggregated_score = (
-            statistics.mean(scores)
-            if scores
-            else 0.0
+            # Calculate article age when RSS publication time is available.
+            # If unavailable, use a neutral recency weight.
+            published_struct = entry.get("published_parsed")
+
+            if published_struct:
+                published_time = time.mktime(published_struct)
+                age_days = max(
+                    0.0,
+                    (current_time - published_time) / 86400.0
+                )
+            else:
+                age_days = 0.0
+
+            # Mild exponential recency weighting.
+            #
+            # Same-day news receives weight close to 1.
+            # Older news gradually contributes less.
+            # The decay is deliberately gentle so that older relevant
+            # articles are not discarded.
+            recency_weight = math.exp(-age_days / 3.0)
+
+            weighted_contribution = sentiment * recency_weight
+
+            weighted_scores.append(weighted_contribution)
+            weighted_values.append(recency_weight)
+
+
+        if weighted_values:
+            aggregated_score = (
+                sum(weighted_scores) / sum(weighted_values)
+            )
+        else:
+            aggregated_score = 0.0
+
+        # Slightly increase the sensitivity of the final signal while
+        # keeping the score bounded to [-1, +1].
+        #
+        # This does not change the model's classification. It only makes
+        # the aggregated market signal less likely to appear artificially
+        # close to zero after several articles partially cancel each other.
+        aggregated_score = max(
+            -1.0,
+            min(1.0, aggregated_score * 1.20)
         )
 
         headlines = [
@@ -136,7 +194,6 @@ def compute_sentiment(symbol: str) -> dict:
 
     except Exception as e:
         print(f"Sentiment analysis failed: {str(e)}")
-
         return {
             "score": 0.0,
             "headlines": ["Failed to fetch news."],
@@ -239,7 +296,7 @@ Return ONLY valid JSON in exactly this format:
 """
 
         response = client.interactions.create(
-            model="gemini-3.6-flash",
+            model="gemini-3.5-flash-lite",
             input=prompt,
         )
 

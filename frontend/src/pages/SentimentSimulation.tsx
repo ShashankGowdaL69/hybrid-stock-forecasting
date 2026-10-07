@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { API_BASE_URL } from '../api/api';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -51,7 +52,7 @@ const SentimentSimulation = () => {
             }
 
             const response = await fetch(
-            `http://127.0.0.1:8000/ml/current-price?symbol=${cleanSymbol}`
+                `${API_BASE_URL}/ml/current-price?symbol=${cleanSymbol}`
             );
 
             if (!response.ok) {
@@ -96,11 +97,11 @@ const SentimentSimulation = () => {
             setSentimentLoading(true);
 
             const response = await fetch(
-                `http://127.0.0.1:8000/ml/sentiment?symbol=${encodeURIComponent(
+                `${API_BASE_URL}/ml/sentiment?symbol=${encodeURIComponent(
                     symbol.trim().toUpperCase()
-                    )}&text=${encodeURIComponent(
+                )}&text=${encodeURIComponent(
                     sentimentText.trim()
-                    )}`,
+                )}`,
                 {
                     method: 'POST',
                 }

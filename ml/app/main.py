@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from .predictor import hybrid_predict
 from .utils.sentiment import compute_sentiment, analyze_text_sentiment
+from .utils.shap_explanation import generate_shap_explanation
 import yfinance as yf
 import logging
 
@@ -142,6 +144,44 @@ async def predict(symbol: str, horizon: int = 30):
             detail=f"Prediction failed: {str(e)}"
         )
 
+class ShapExplanationRequest(BaseModel):
+    symbol: str
+    features: dict
+    shap_values: list
+
+@app.post("/ml/shap-explanation")
+async def shap_explanation(request: ShapExplanationRequest):
+    try:
+        if not request.symbol.strip():
+            raise ValueError("Symbol is required")
+
+        if not request.features:
+            raise ValueError("Features are required")
+
+        if not request.shap_values:
+            raise ValueError("SHAP values are required")
+
+        result = generate_shap_explanation(
+            request.symbol.strip().upper(),
+            request.features,
+            request.shap_values
+        )
+
+        return {
+            "shap_explanation": result
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    except Exception as e:
+        logger.error(
+            f"SHAP explanation failed for {request.symbol}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"SHAP explanation failed: {str(e)}"
+        )
 
 @app.get("/")
 def root():

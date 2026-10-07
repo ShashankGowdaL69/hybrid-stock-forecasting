@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { getPrediction } from '../api/api';
+import { API_BASE_URL, getPrediction } from '../api/api';
 import { Line, Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -45,12 +45,27 @@ interface ShapFeature {
 }
 
 interface PredictionData {
-  symbol:string; horizon:number; last_price:number; forecast:ForecastPoint[];
-  metrics:{arima:ForecastMetrics;lstm:ForecastMetrics;xgb:ForecastMetrics;ensemble:ForecastMetrics;};
+  symbol: string;
+  horizon: number;
+  last_price: number;
+  forecast: ForecastPoint[];
+  metrics: {
+    arima: ForecastMetrics;
+    lstm: ForecastMetrics;
+    xgb: ForecastMetrics;
+    ensemble: ForecastMetrics;
+  };
   shap: ShapFeature[];
-  shap_explanation:string;
-  arima_weight:number; lstm_weight:number; xgb_weight:number;
-  sentiment:{score:number;headlines:string[];posts:string[];trends:{term:string;frequency:number}[]};
+  shap_features: Record<string, number>;
+  sentiment: {
+    score: number;
+    headlines: string[];
+    posts: string[];
+    trends: {
+      term: string;
+      frequency: number;
+    }[];
+  };
 }
 
 const Predictions: React.FC = () => {
@@ -61,10 +76,15 @@ const Predictions: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [showNews, setShowNews] = useState(false);
   const [showShapExplanation, setShowShapExplanation] = useState(false);
+  const [shapExplanation, setShapExplanation] = useState<string | null>(null);
+  const [shapExplanationLoading, setShapExplanationLoading] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
     setError(null);
+    setShowShapExplanation(false);
+    setShapExplanation(null);
+    setShapExplanationLoading(false);
 
     try {
       const result = await getPrediction(symbol, horizon);
@@ -78,6 +98,43 @@ const Predictions: React.FC = () => {
       setError(errorMessage);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchShapExplanation = async () => {
+    if (!data) return;
+
+    setShapExplanationLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/ml/shap-explanation`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            symbol: data.symbol,
+            features: data.shap_features,
+            shap_values: data.shap,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to generate SHAP explanation');
+      }
+
+      const result = await response.json();
+
+      setShapExplanation(result.shap_explanation);
+    } catch {
+      setShapExplanation(
+        'The model\'s SHAP analysis identified the most relevant technical factors, but a natural-language explanation could not be generated at this time.'
+      );
+    } finally {
+      setShapExplanationLoading(false);
     }
   };
 
@@ -110,7 +167,7 @@ const Predictions: React.FC = () => {
           tension: 0.1,
         },
         {
-          label: 'Hybrid Ensemble',
+          label: 'Stacking Meta-Model',
           data: data.forecast.map((point) => point.ensemble),
           borderColor: 'rgba(75, 192, 192, 1)',
           borderWidth: 3,
@@ -134,6 +191,19 @@ const Predictions: React.FC = () => {
         ],
       }
     : null;
+
+    const averageBaseMape = data
+    ? (
+        data.metrics.arima.mape +
+        data.metrics.lstm.mape +
+        data.metrics.xgb.mape
+      ) / 3
+    : 0;
+
+    const stackingMapeReduction =
+      data && averageBaseMape > 0
+        ? ((averageBaseMape - data.metrics.ensemble.mape) / averageBaseMape) * 100
+        : 0;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }} className="p-6 text-white bg-gray-900 min-h-screen">
@@ -232,13 +302,14 @@ const Predictions: React.FC = () => {
                 </h3>
 
                 <span className="text-xs px-3 py-1 rounded-full bg-blue-900/50 text-blue-300 border border-blue-700">
-                  Validation-based ensemble
+                  Stacking ensemble
                 </span>
               </div>
 
               <p className="text-sm text-gray-400 mb-5">
                 Performance is evaluated on a held-out historical test set.
-                Lower MAE, RMSE, and MAPE indicate better predictive accuracy.
+                The stacking meta-model learns how to combine ARIMA, LSTM,
+                and XGBoost predictions using chronological out-of-sample data.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -246,7 +317,11 @@ const Predictions: React.FC = () => {
                   { name: 'ARIMA', metrics: data.metrics.arima, hybrid: false },
                   { name: 'LSTM', metrics: data.metrics.lstm, hybrid: false },
                   { name: 'XGBoost', metrics: data.metrics.xgb, hybrid: false },
-                  { name: 'Hybrid Ensemble', metrics: data.metrics.ensemble, hybrid: true },
+                  {
+                    name: 'Stacking Meta-Model',
+                    metrics: data.metrics.ensemble,
+                    hybrid: true,
+                  },
                 ].map((model) => (
                   <div
                     key={model.name}
@@ -267,7 +342,7 @@ const Predictions: React.FC = () => {
 
                       {model.hybrid && (
                         <span className="text-xs px-2 py-1 rounded-full bg-blue-600 text-white">
-                          Primary
+                          Final
                         </span>
                       )}
                     </div>
@@ -301,16 +376,29 @@ const Predictions: React.FC = () => {
               <div className="mt-5 p-4 rounded-xl bg-gray-900 border border-gray-700">
                 <p className="text-sm text-gray-300">
                   <span className="font-semibold text-blue-300">
-                    Ensemble weights:
+                    Stacking improvement:
                   </span>{' '}
-                  ARIMA {(data.arima_weight * 100).toFixed(0)}% · LSTM{' '}
-                  {(data.lstm_weight * 100).toFixed(0)}% · XGBoost{' '}
-                  {(data.xgb_weight * 100).toFixed(0)}%
+                  Average base-model MAPE{' '}
+                  <span className="text-white font-semibold">
+                    {averageBaseMape.toFixed(2)}%
+                  </span>{' '}
+                  → Stacking MAPE{' '}
+                  <span className="text-white font-semibold">
+                    {data.metrics.ensemble.mape.toFixed(2)}%
+                  </span>
+                </p>
+
+                <p className="text-sm text-green-300 mt-2">
+                  MAPE reduction:{' '}
+                  <span className="font-semibold">
+                    {stackingMapeReduction.toFixed(1)}%
+                  </span>
                 </p>
 
                 <p className="text-xs text-gray-500 mt-2">
-                  The weights are selected using validation performance rather than being
-                  manually assigned.
+                  The meta-model learns relationships between the three
+                  base-model predictions instead of using fixed ensemble
+                  weights.
                 </p>
               </div>
             </div>
@@ -434,9 +522,16 @@ const Predictions: React.FC = () => {
                   </h3>
 
                   <button
-                    onClick={() =>
-                      setShowShapExplanation(!showShapExplanation)
-                    }
+                    onClick={() => {
+                      if (showShapExplanation) {
+                        setShowShapExplanation(false);
+                      } else {
+                        setShowShapExplanation(true);
+                        if (!shapExplanation) {
+                          fetchShapExplanation();
+                        }
+                      }
+                    }}
                     className="px-3 py-1.5 rounded-lg bg-blue-400 text-white text-sm font-semibold hover:bg-blue-500"
                   >
                     {showShapExplanation
@@ -476,11 +571,17 @@ const Predictions: React.FC = () => {
                     </div>
                   )}
 
-                  {showShapExplanation && data.shap_explanation && (
+                  {showShapExplanation && (
                     <div className="mt-5 rounded-xl bg-gray-900 border border-gray-700 p-4">
-                      <p className="text-gray-300 leading-relaxed">
-                        {data.shap_explanation}
-                      </p>
+                      {shapExplanationLoading ? (
+                        <p className="text-gray-400">
+                          Generating model explanation...
+                        </p>
+                      ) : (
+                        <p className="text-gray-300 leading-relaxed">
+                          {shapExplanation}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -507,14 +608,14 @@ const Predictions: React.FC = () => {
                           <span className="text-orange-300">
                             ARIMA: ₹{point.arima.toFixed(2)}
                           </span>
-                          <span className="text-blue-300">
-                            LSTM: ₹{point.lstm.toFixed(2)}
-                          </span>
+                            <span className="text-blue-300">
+                              LSTM: ₹{point.lstm.toFixed(2)}
+                            </span>
                           <span className="text-purple-300">
                             XGB: ₹{point.xgb.toFixed(2)}
                           </span>
                           <span className="text-white font-semibold">
-                            Hybrid: ₹{point.ensemble.toFixed(2)}
+                            Stacking: ₹{point.ensemble.toFixed(2)}
                           </span>
                         </div>
                       </li>

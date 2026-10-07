@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-axios.defaults.baseURL =
+export const API_BASE_URL =
   import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+
+axios.defaults.baseURL = API_BASE_URL;
 
 export const getPrediction = async (
   symbol: string,

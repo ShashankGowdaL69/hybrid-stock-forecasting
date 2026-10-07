@@ -6,13 +6,13 @@ tf.keras.utils.set_random_seed(42)
 from statsmodels.tsa.arima.model import ARIMA
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
+
 from sklearn.preprocessing import MinMaxScaler
 from xgboost import XGBRegressor
 import shap
 from .utils.data_loader import fetch_historical
 from .utils.features import build_features
 from .utils.sentiment import compute_sentiment
-from .utils.shap_explanation import generate_shap_explanation
 
 def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
     """
@@ -68,13 +68,29 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
     xgb_train_end = int(len(prices) * 0.70)
     xgb_validation_end = int(len(prices) * 0.85)
 
+    xgb_test_size = len(prices) - xgb_validation_end
+
     X_xgb_train = X_xgb.iloc[:xgb_train_end - 1]
-    X_xgb_validation = X_xgb.iloc[xgb_train_end - 1:xgb_validation_end - 1]
-    X_xgb_test = X_xgb.iloc[xgb_validation_end - 1:]
+
+    X_xgb_validation = X_xgb.iloc[
+        xgb_train_end - 1:xgb_validation_end - 1
+    ]
+
+    X_xgb_test = X_xgb.iloc[
+        xgb_validation_end - 1:
+        xgb_validation_end - 1 + xgb_test_size
+    ]
 
     y_xgb_train = y_xgb.iloc[:xgb_train_end - 1]
-    y_xgb_validation = y_xgb.iloc[xgb_train_end - 1:xgb_validation_end - 1]
-    y_xgb_test = y_xgb.iloc[xgb_validation_end - 1:]
+
+    y_xgb_validation = y_xgb.iloc[
+        xgb_train_end - 1:xgb_validation_end - 1
+    ]
+
+    y_xgb_test = y_xgb.iloc[
+        xgb_validation_end - 1:
+        xgb_validation_end - 1 + xgb_test_size
+    ]
 
     # XGBoost regression model
     xgb_model = XGBRegressor(
@@ -125,15 +141,6 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
     print('XGBoost MAE:', round(xgb_mae, 2))
     print('XGBoost RMSE:', round(xgb_rmse, 2))
     print('XGBoost MAPE:', round(xgb_mape, 2))
-
-
-
-
-
-
-
-
-
 
      # Prepare LSTM data using a chronological split
     close_values = prices['Close'].values.reshape(-1, 1)
@@ -322,10 +329,16 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
     print('ARIMA RMSE:', round(rmse, 2))
     print('ARIMA MAPE:', round(mape, 2))
 
+
+
     # ---------------------------------------------------------
-    # Walk-forward validation for ARIMA, LSTM, and XGBoost
-    # All models forecast the same historical 60-day periods
-    # using only information available before each forecast.
+    # Expanding-window walk-forward stacking validation
+    #
+    # ARIMA, LSTM, and XGBoost generate out-of-sample
+    # predictions across chronological validation folds.
+    #
+    # These predictions are used to train a second-level
+    # XGBoost meta-model.
     # ---------------------------------------------------------
 
     n_folds = 3
@@ -333,20 +346,38 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
 
     fold_predictions = []
     walk_forward_actuals = []
+    fold_reference_prices_list = []
+
+    validation_range = validation_end - train_end
+
+    if validation_range < validation_size:
+        validation_size = validation_range
+
+    fold_step = (
+        validation_range - validation_size
+    ) // max(n_folds - 1, 1)
 
     for fold in range(n_folds):
 
         fold_train_end = (
             train_end
-            + fold * ((validation_end - train_end) // n_folds)
+            + fold * fold_step
         )
 
-        fold_validation_end = fold_train_end + validation_size
+        fold_validation_end = (
+            fold_train_end
+            + validation_size
+        )
 
-        if fold_validation_end > len(prices):
+        if fold_validation_end > validation_end:
             break
 
-        fold_train = prices['Close'].iloc[:fold_train_end]
+        # Expanding-window training:
+        # every fold keeps all historical observations
+        # from the beginning of the dataset.
+        fold_train = prices['Close'].iloc[
+            :fold_train_end
+        ]
 
         fold_validation = prices['Close'].iloc[
             fold_train_end:fold_validation_end
@@ -422,7 +453,7 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             verbose=0
         )
 
-        # Recursively forecast the entire validation period
+        # Recursively forecast the entire validation period.
         fold_lstm_input = fold_train_scaled[-60:].copy()
 
         fold_lstm_pred_scaled = []
@@ -463,9 +494,9 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         # =====================================================
 
         # XGBoost predicts the NEXT day's Close.
-        # Therefore, the final feature row of the training
-        # period predicts the first validation day and must
-        # NOT be used as a training row.
+        # The final feature row of the training period predicts
+        # the first validation day and must NOT be used as a
+        # training row.
 
         fold_xgb_train = feature_df.iloc[
             :fold_train_end - 1
@@ -486,8 +517,8 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             fold_xgb_train['target']
         )
 
-        # Start XGBoost from the last data available
-        # before the validation period.
+        # Start XGBoost from the last data available before
+        # the validation period.
         fold_cutoff_date = pd.to_datetime(
             prices['Date'].iloc[fold_train_end - 1]
         )
@@ -558,7 +589,7 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         )
 
         # =====================================================
-        # Store predictions from this fold
+        # Store out-of-fold predictions
         # =====================================================
 
         minimum_length = min(
@@ -568,7 +599,7 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             len(fold_xgb_pred)
         )
 
-        walk_forward_predictions = (
+        fold_prediction_matrix = (
             np.column_stack([
                 np.asarray(
                     fold_arima_pred
@@ -584,42 +615,38 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             ])
         )
 
-        walk_forward_actuals.append(
-            fold_validation.values[
-                :minimum_length
-            ]
-        )
+        fold_actuals = fold_validation.values[
+            :minimum_length
+        ]
 
         # Print individual model performance for this fold.
         fold_arima_mape = np.mean(
             np.abs(
                 (
-                    fold_validation.values[:minimum_length]
-                    - np.asarray(
-                        fold_arima_pred
-                    )[:minimum_length]
+                    fold_actuals
+                    - fold_prediction_matrix[:, 0]
                 )
-                / fold_validation.values[:minimum_length]
+                / fold_actuals
             )
         ) * 100
 
         fold_lstm_mape = np.mean(
             np.abs(
                 (
-                    fold_validation.values[:minimum_length]
-                    - fold_lstm_pred[:minimum_length]
+                    fold_actuals
+                    - fold_prediction_matrix[:, 1]
                 )
-                / fold_validation.values[:minimum_length]
+                / fold_actuals
             )
         ) * 100
 
         fold_xgb_mape = np.mean(
             np.abs(
                 (
-                    fold_validation.values[:minimum_length]
-                    - fold_xgb_pred[:minimum_length]
+                    fold_actuals
+                    - fold_prediction_matrix[:, 2]
                 )
-                / fold_validation.values[:minimum_length]
+                / fold_actuals
             )
         ) * 100
 
@@ -630,14 +657,41 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             f'XGBoost: {fold_xgb_mape:.2f}'
         )
 
-        # Store predictions separately so all folds can
-        # later be combined for weight selection.
         fold_predictions.append(
-            walk_forward_predictions
+            fold_prediction_matrix
+        )
+
+        walk_forward_actuals.append(
+            fold_actuals
+        )
+
+        # Price immediately before each validation day.
+        # This is known at prediction time and is therefore
+        # safe to use for relative-price stacking.
+        fold_reference_prices = prices['Close'].iloc[
+            fold_train_end - 1:fold_validation_end - 1
+        ].values
+
+        fold_reference_prices = fold_reference_prices[
+            :minimum_length
+        ]
+
+        fold_reference_prices = np.asarray(
+            fold_reference_prices
+        )
+
+        if len(fold_reference_prices) != minimum_length:
+            raise ValueError(
+                'Walk-forward reference-price length '
+                'does not match prediction length.'
+            )
+
+        fold_reference_prices_list.append(
+            fold_reference_prices
         )
 
     # =========================================================
-    # Combine all walk-forward predictions
+    # Combine all out-of-fold predictions
     # =========================================================
 
     walk_forward_predictions = np.vstack(
@@ -649,13 +703,9 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
     )
 
     # =========================================================
-    # Select ensemble weights using all walk-forward
-    # predictions.
+    # Base-model walk-forward diagnostics
     # =========================================================
 
-    best_mape = float('inf')
-
-        # Show average walk-forward MAPE for each individual model
     arima_walk_forward_mape = np.mean(
         np.abs(
             (
@@ -702,188 +752,425 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         round(xgb_walk_forward_mape, 2)
     )
 
-        # =========================================================
-    # Diagnostic: estimate typical prediction error magnitude
+    # =========================================================
+    # Walk-forward error diagnostics
     # =========================================================
 
     actual_prices = walk_forward_actuals
 
     arima_errors_pct = (
-        (walk_forward_predictions[:, 0] - actual_prices)
+        (
+            walk_forward_predictions[:, 0]
+            - actual_prices
+        )
         / actual_prices
     )
 
     lstm_errors_pct = (
-        (walk_forward_predictions[:, 1] - actual_prices)
+        (
+            walk_forward_predictions[:, 1]
+            - actual_prices
+        )
         / actual_prices
     )
 
     xgb_errors_pct = (
-        (walk_forward_predictions[:, 2] - actual_prices)
+        (
+            walk_forward_predictions[:, 2]
+            - actual_prices
+        )
         / actual_prices
     )
 
     print('\nWalk-forward error diagnostics:')
     print(
         'ARIMA mean error %:',
-        round(np.mean(arima_errors_pct) * 100, 2)
+        round(
+            np.mean(arima_errors_pct) * 100,
+            2
+        )
     )
     print(
         'LSTM mean error %:',
-        round(np.mean(lstm_errors_pct) * 100, 2)
+        round(
+            np.mean(lstm_errors_pct) * 100,
+            2
+        )
     )
     print(
         'XGBoost mean error %:',
-        round(np.mean(xgb_errors_pct) * 100, 2)
+        round(
+            np.mean(xgb_errors_pct) * 100,
+            2
+        )
     )
 
     print(
         'ARIMA mean absolute error %:',
-        round(np.mean(np.abs(arima_errors_pct)) * 100, 2)
+        round(
+            np.mean(np.abs(arima_errors_pct)) * 100,
+            2
+        )
     )
     print(
         'LSTM mean absolute error %:',
-        round(np.mean(np.abs(lstm_errors_pct)) * 100, 2)
+        round(
+            np.mean(np.abs(lstm_errors_pct)) * 100,
+            2
+        )
     )
     print(
         'XGBoost mean absolute error %:',
-        round(np.mean(np.abs(xgb_errors_pct)) * 100, 2)
+        round(
+            np.mean(np.abs(xgb_errors_pct)) * 100,
+            2
+        )
     )
 
-    best_arima_weight = 0.0
-    best_lstm_weight = 0.0
-    best_xgb_weight = 0.0
 
-    MAX_MODEL_WEIGHT = 0.85
+    # =========================================================
+    # Prepare relative-price features for stacking
+    #
+    # The meta-model learns:
+    #
+    #   base prediction / previous known price
+    #
+    # instead of absolute prices.
+    #
+    # Target:
+    #
+    #   actual price / previous known price
+    #
+    # This makes the meta-model less sensitive to changes
+    # in the absolute price level of the stock over time.
+    # =========================================================
 
-    for arima_weight_candidate in np.arange(
-        0.0,
-        MAX_MODEL_WEIGHT + 0.01,
-        0.01
+    # walk_forward_predictions and walk_forward_actuals
+    # were already combined above for the diagnostics.
+    # Only the reference prices still need to be combined.
+    walk_forward_reference_prices = np.concatenate(
+        fold_reference_prices_list
+    )
+
+    if len(walk_forward_predictions) != len(
+        walk_forward_reference_prices
     ):
+        raise ValueError(
+            'Walk-forward prediction and reference-price '
+            'lengths do not match.'
+        )
 
-        for lstm_weight_candidate in np.arange(
-            0.0,
-            MAX_MODEL_WEIGHT + 0.01,
-            0.01
-        ):
+    if len(walk_forward_actuals) != len(
+        walk_forward_reference_prices
+    ):
+        raise ValueError(
+            'Walk-forward actual and reference-price '
+            'lengths do not match.'
+        )
 
-            xgb_weight_candidate = (
-                1.0
-                - arima_weight_candidate
-                - lstm_weight_candidate
+    walk_forward_reference_prices = np.maximum(
+        walk_forward_reference_prices,
+        1e-8
+    )
+
+    walk_forward_meta_features = (
+        walk_forward_predictions
+        / walk_forward_reference_prices.reshape(-1, 1)
+    )
+
+    walk_forward_meta_actuals = (
+        walk_forward_actuals
+        / walk_forward_reference_prices
+    )
+
+    print('\nRelative-price stacking training ranges:')
+    print(
+        'ARIMA ratio:',
+        round(
+            walk_forward_meta_features[:, 0].min(),
+            4
+        ),
+        '->',
+        round(
+            walk_forward_meta_features[:, 0].max(),
+            4
+        )
+    )
+    print(
+        'LSTM ratio:',
+        round(
+            walk_forward_meta_features[:, 1].min(),
+            4
+        ),
+        '->',
+        round(
+            walk_forward_meta_features[:, 1].max(),
+            4
+        )
+    )
+    print(
+        'XGBoost ratio:',
+        round(
+            walk_forward_meta_features[:, 2].min(),
+            4
+        ),
+        '->',
+        round(
+            walk_forward_meta_features[:, 2].max(),
+            4
+        )
+    )
+    print(
+        'Actual ratio:',
+        round(
+            walk_forward_meta_actuals.min(),
+            4
+        ),
+        '->',
+        round(
+            walk_forward_meta_actuals.max(),
+            4
+        )
+    )
+
+    # =========================================================
+    # Train stacking meta-model
+    #
+    # Inputs:
+    #   Relative ARIMA prediction
+    #   Relative LSTM prediction
+    #   Relative XGBoost prediction
+    #
+    # Target:
+    #   Relative actual closing price
+    #
+    # Every meta-model training row comes from a chronological
+    # out-of-sample base-model prediction.
+    # =========================================================
+
+    meta_model = XGBRegressor(
+        n_estimators=200,
+        max_depth=2,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=1.0,
+        objective='reg:squarederror',
+        random_state=42
+    )
+
+    meta_model.fit(
+        walk_forward_meta_features,
+        walk_forward_meta_actuals
+    )
+
+    print(
+        '\nStacking meta-model training complete'
+    )
+
+    # =========================================================
+    # Retrain XGBoost on the complete development period
+    # (original 70% train + 15% validation = 85%)
+    #
+    # This produces the proper XGBoost predictions for the
+    # untouched final 15% test set.
+    # =========================================================
+
+    test_xgb_model = XGBRegressor(
+        n_estimators=300,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective='reg:squarederror',
+        random_state=42
+    )
+
+    test_xgb_model.fit(
+        X_xgb.iloc[:validation_end - 1],
+        y_xgb.iloc[:validation_end - 1]
+    )
+
+    xgb_test_pred = test_xgb_model.predict(
+        X_xgb_test
+    )
+
+    # Recalculate XGBoost test metrics using the model
+    # trained on the complete 85% development period.
+    xgb_mae = np.mean(
+        np.abs(
+            y_xgb_test.values
+            - xgb_test_pred
+        )
+    )
+
+    xgb_rmse = np.sqrt(
+        np.mean(
+            (
+                y_xgb_test.values
+                - xgb_test_pred
+            ) ** 2
+        )
+    )
+
+    xgb_mape = np.mean(
+        np.abs(
+            (
+                y_xgb_test.values
+                - xgb_test_pred
             )
-
-            # Skip invalid combinations:
-            # all weights must be between 0% and 85%.
-            if (
-                xgb_weight_candidate < 0.0
-                or xgb_weight_candidate > MAX_MODEL_WEIGHT
-            ):
-                continue
-
-            candidate_pred = (
-                arima_weight_candidate
-                * walk_forward_predictions[:, 0]
-
-                + lstm_weight_candidate
-                * walk_forward_predictions[:, 1]
-
-                + xgb_weight_candidate
-                * walk_forward_predictions[:, 2]
-            )
-
-            candidate_mape = np.mean(
-                np.abs(
-                    (
-                        walk_forward_actuals
-                        - candidate_pred
-                    )
-                    / walk_forward_actuals
-                )
-            ) * 100
-
-            if candidate_mape < best_mape:
-
-                best_mape = candidate_mape
-
-                best_arima_weight = (
-                    arima_weight_candidate
-                )
-
-                best_lstm_weight = (
-                    lstm_weight_candidate
-                )
-
-                best_xgb_weight = (
-                    xgb_weight_candidate
-                )
-
-    arima_weight = best_arima_weight
-    lstm_weight = best_lstm_weight
-    xgb_weight = best_xgb_weight
+            / y_xgb_test.values
+        )
+    ) * 100
 
     print(
-        '\nFinal walk-forward ensemble weights:'
+        '\nFinal 85% development XGBoost test metrics:'
+    )
+    print(
+        'XGBoost MAE:',
+        round(xgb_mae, 2)
+    )
+    print(
+        'XGBoost RMSE:',
+        round(xgb_rmse, 2)
+    )
+    print(
+        'XGBoost MAPE:',
+        round(xgb_mape, 2)
+    )
+
+    # =========================================================
+    # Generate base-model predictions for the untouched test
+    # =========================================================
+
+    test_meta_features_absolute = np.column_stack([
+        np.asarray(
+            arima_pred
+        ),
+        lstm_test_pred,
+        xgb_test_pred
+    ])
+
+    # The previous day's actual closing price is known when
+    # making each test-day prediction.
+    test_reference_prices = prices['Close'].iloc[
+        validation_end - 1:-1
+    ].values
+
+    test_reference_prices = np.asarray(
+        test_reference_prices
+    )
+
+    if len(test_reference_prices) != len(
+        test_meta_features_absolute
+    ):
+        raise ValueError(
+            'Test reference-price length does not match '
+            'test prediction length.'
+        )
+
+    test_reference_prices = np.maximum(
+        test_reference_prices,
+        1e-8
+    )
+
+    # Convert base predictions to relative-price features.
+    test_meta_features = (
+        test_meta_features_absolute
+        / test_reference_prices.reshape(-1, 1)
+    )
+
+    # The meta-model predicts a relative price ratio.
+    ensemble_test_ratio = meta_model.predict(
+        test_meta_features
+    )
+
+    # Convert the predicted ratio back to the original
+    # stock-price scale.
+    ensemble_test_pred = (
+        ensemble_test_ratio
+        * test_reference_prices
+    )
+
+    print('\nFinal test relative meta-features:')
+
+    print(
+        'ARIMA ratio:',
+        round(test_meta_features[:, 0].min(), 4),
+        '->',
+        round(test_meta_features[:, 0].max(), 4)
     )
 
     print(
-        'XGBoost weight:',
-        round(xgb_weight, 2)
+        'LSTM ratio:',
+        round(test_meta_features[:, 1].min(), 4),
+        '->',
+        round(test_meta_features[:, 1].max(), 4)
     )
 
     print(
-        'ARIMA weight:',
-        round(arima_weight, 2)
+        'XGBoost ratio:',
+        round(test_meta_features[:, 2].min(), 4),
+        '->',
+        round(test_meta_features[:, 2].max(), 4)
     )
 
     print(
-        'LSTM weight:',
-        round(lstm_weight, 2)
+        'Actual price:',
+        round(test.values.min(), 2),
+        '->',
+        round(test.values.max(), 2)
     )
 
-    print(
-        'Best walk-forward validation MAPE:',
-        round(best_mape, 2)
-    )
 
-    # Apply the validation-selected weights to the test predictions
-    # Use the common 179-row test period shared by all models.
-    test_length = min(
-        len(arima_pred),
-        len(lstm_test_pred),
-        len(xgb_test_pred)
-    )
-
-    ensemble_pred = (
-        arima_weight * arima_pred.values[:test_length]
-        + lstm_weight * lstm_test_pred[:test_length]
-        + xgb_weight * xgb_test_pred[:test_length]
-    )
-
-    print('First ensemble prediction:', ensemble_pred[0])
-
-    # Evaluate ensemble on the test set
-    ensemble_actuals = test.values[:test_length]
+    ensemble_actuals = test.values
 
     ensemble_mae = np.mean(
-        np.abs(ensemble_actuals - ensemble_pred)
+        np.abs(
+            ensemble_actuals
+            - ensemble_test_pred
+        )
     )
 
     ensemble_rmse = np.sqrt(
-        np.mean((ensemble_actuals - ensemble_pred) ** 2)
+        np.mean(
+            (
+                ensemble_actuals
+                - ensemble_test_pred
+            ) ** 2
+        )
     )
 
     ensemble_mape = np.mean(
         np.abs(
-            (ensemble_actuals - ensemble_pred)
+            (
+                ensemble_actuals
+                - ensemble_test_pred
+            )
             / ensemble_actuals
         )
     ) * 100
 
-    print('Ensemble MAE:', round(ensemble_mae, 2))
-    print('Ensemble RMSE:', round(ensemble_rmse, 2))
-    print('Ensemble MAPE:', round(ensemble_mape, 2))
+    print(
+        '\nFinal stacking ensemble test metrics:'
+    )
+    print(
+        'Ensemble MAE:',
+        round(ensemble_mae, 2)
+    )
+    print(
+        'Ensemble RMSE:',
+        round(ensemble_rmse, 2)
+    )
+    print(
+        'Ensemble MAPE:',
+        round(ensemble_mape, 2)
+    )
+
+
+    print(
+        '\nStacking meta-model test prediction:',
+        ensemble_test_pred[0]
+    )
 
     print('Train rows:', len(train))
     print('Validation rows:', len(validation))
@@ -924,11 +1211,10 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         )
     ]
 
-    shap_explanation = generate_shap_explanation(
-        symbol,
-        latest_xgb_features.iloc[0].to_dict(),
-        shap_dict
-    )
+    latest_feature_values = {
+        feature: round(float(latest_xgb_features.iloc[0][feature]), 4)
+        for feature in feature_columns
+    }
 
     print('Forecast XGBoost training complete')
 
@@ -966,9 +1252,6 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             [xgb_history, pd.DataFrame([next_row])],
             ignore_index=True
         )
-
-    print('Future XGBoost forecast:')
-    print(np.array(future_xgb_pred))
 
     # Retrain ARIMA on all available historical data for future forecasting
     forecast_arima_model = ARIMA(
@@ -1047,65 +1330,98 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         np.array(future_lstm_scaled).reshape(-1, 1)
     ).flatten()
 
-    print('Future LSTM forecast:')
-    print(future_lstm_pred)
+    # Generate future ensemble forecast using the trained
+    # stacking meta-model.
+    future_meta_features_absolute = np.column_stack([
+        np.asarray(
+            future_arima_pred
+        ),
+        future_lstm_pred,
+        np.array(future_xgb_pred)
+    ])
 
-        # Diagnostic: compare recent actual prices with future LSTM forecast
-    print('\nRecent actual closing prices:')
-    print(prices['Close'].tail(20).values)
-
-    print('\nRecent actual price change:')
-    print(
-        round(
-            prices['Close'].iloc[-1] - prices['Close'].iloc[-20],
-            2
-        )
+    # For future forecasting, the latest observed closing
+    # price is the known reference price.
+    future_reference_price = float(
+        prices['Close'].iloc[-1]
     )
 
-    print('\nLSTM forecast change over horizon:')
-    print(
-        round(
-            future_lstm_pred[-1] - future_lstm_pred[0],
-            2
-        )
+    future_reference_price = max(
+        future_reference_price,
+        1e-8
     )
 
-    print('Future ARIMA forecast:')
-    print(future_arima_pred)
+    # Convert future base predictions to relative-price features.
+    future_meta_features = (
+        future_meta_features_absolute
+        / future_reference_price
+    )
 
-    # Generate future ensemble forecast
+
+    # Meta-model predicts the future price relative to the
+    # latest known closing price.
+    future_ensemble_ratio = meta_model.predict(
+        future_meta_features
+    )
+
+    # Convert relative prediction back to actual price.
     future_ensemble_pred = (
-        arima_weight * future_arima_pred.values
-        + lstm_weight * future_lstm_pred
-        + xgb_weight * np.array(future_xgb_pred)
+        future_ensemble_ratio
+        * future_reference_price
     )
 
-    # Apply current financial sentiment as a bounded overlay
-    recent_returns = prices['Close'].pct_change().dropna()
-    recent_volatility = recent_returns.tail(20).std()
+    print(
+        'Future stacking ensemble forecast:'
+    )
+    print(future_ensemble_pred)
 
-    SENTIMENT_IMPACT = 0.05
+    # Apply current financial sentiment as a bounded overlay.
+    #
+    # The sentiment score is already normalized to [-1, +1],
+    # so it is used directly rather than multiplying it by
+    # recent market volatility.
+    #
+    # The effect decays exponentially across the forecast
+    # horizon because recent news should have a stronger
+    # near-term influence and gradually lose influence
+    # further into the future.
+    SENTIMENT_IMPACT = 0.03
+    SENTIMENT_DECAY = 5.0
 
-    sentiment_adjustment = (
+    forecast_days = np.arange(1, horizon + 1)
+
+    sentiment_adjustments = (
         sentiment_score
-        * recent_volatility
         * SENTIMENT_IMPACT
+        * np.exp(
+            -forecast_days / SENTIMENT_DECAY
+        )
     )
 
     print('Sentiment diagnostic:')
-    print('  recent volatility:', recent_volatility)
     print('  sentiment score:', sentiment_score)
     print('  sentiment impact:', SENTIMENT_IMPACT)
-    print('  sentiment adjustment:', sentiment_adjustment)
+    print('  sentiment decay:', SENTIMENT_DECAY)
+    print(
+        '  day 1 adjustment %:',
+        round(sentiment_adjustments[0] * 100, 4)
+    )
+    print(
+        '  final day adjustment %:',
+        round(sentiment_adjustments[-1] * 100, 4)
+    )
 
     future_ensemble_pred = future_ensemble_pred * (
-        1 + sentiment_adjustment
+        1 + sentiment_adjustments
     )
 
     print('Sentiment score:', round(sentiment_score, 4))
     print(
         'Sentiment adjustment %:',
-        round(sentiment_adjustment * 100, 4)
+        np.round(
+            sentiment_adjustments * 100,
+            4
+        )
     )
 
     # Generate dates for the forecast horizon
@@ -1123,9 +1439,6 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
         'symbol': symbol,
         'horizon': horizon,
         'last_price': float(prices['Close'].iloc[-1]),
-        'arima_weight': float(arima_weight),
-        'lstm_weight': float(lstm_weight),
-        'xgb_weight': float(xgb_weight),
         'forecast': [
             {
                 'date': future_dates[i].strftime('%Y-%m-%d'),
@@ -1159,7 +1472,7 @@ def hybrid_predict(symbol: str, horizon: int, sentiment_score: float = 0.0):
             }
         },
         "shap": shap_dict,
-        "shap_explanation": shap_explanation
+        "shap_features": latest_feature_values,
     }
 
 def create_sequences(data, lookback=60):
