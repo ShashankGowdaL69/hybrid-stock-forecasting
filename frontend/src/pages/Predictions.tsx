@@ -1,5 +1,12 @@
-import { useState } from 'react';
-import { API_BASE_URL, getPrediction } from '../api/api';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '@clerk/clerk-react';
+import {
+  API_BASE_URL,
+  getPrediction,
+  saveForecastHistory,
+  addToWatchlist,
+} from '../api/api';
 import { Line, Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -13,6 +20,7 @@ import {
   Legend,
 } from 'chart.js';
 import { motion } from 'framer-motion';
+import axios from 'axios';
 
 ChartJS.register(
   CategoryScale,
@@ -69,6 +77,8 @@ interface PredictionData {
 }
 
 const Predictions: React.FC = () => {
+  const { getToken } = useAuth();
+
   const [data, setData] = useState<PredictionData | null>(null);
   const [symbol, setSymbol] = useState('AXISBANK');
   const [horizon, setHorizon] = useState(30);
@@ -79,7 +89,19 @@ const Predictions: React.FC = () => {
   const [shapExplanation, setShapExplanation] = useState<string | null>(null);
   const [shapExplanationLoading, setShapExplanationLoading] = useState(false);
 
-  const fetchData = async () => {
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null);
+  const [watchlistMessageType, setWatchlistMessageType] = useState<
+    'success' | 'error' | 'warning' | null
+  >(null);
+
+  const [searchParams] = useSearchParams();
+  const autoForecastStarted = useRef(false);
+
+  const fetchData = async (
+    requestedSymbol = symbol,
+    requestedHorizon = horizon
+  ) => {
     setLoading(true);
     setError(null);
     setShowShapExplanation(false);
@@ -87,19 +109,163 @@ const Predictions: React.FC = () => {
     setShapExplanationLoading(false);
 
     try {
-      const result = await getPrediction(symbol, horizon);
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error(
+          'Authentication failed. Please sign in again.'
+        );
+      }
+
+      const result = await getPrediction(
+        requestedSymbol,
+        requestedHorizon,
+        token
+      );
+
       setData(result);
+
+      const finalForecast =
+        result.forecast[result.forecast.length - 1]?.ensemble ?? 0;
+
+      const expectedChange = result.last_price
+        ? ((finalForecast - result.last_price) /
+            result.last_price) *
+          100
+        : 0;
+
+      const historyToken = await getToken();
+
+      if (historyToken) {
+        await saveForecastHistory(
+          {
+            symbol: result.symbol,
+            horizon: result.horizon,
+            currentPrice: result.last_price,
+            finalForecast,
+            expectedChange,
+            sentimentScore: result.sentiment.score,
+            ensembleMape: result.metrics.ensemble.mape,
+          },
+          historyToken
+        );
+      }
+
+  } catch (error: unknown) {
+    setData(null);
+
+    let errorMessage =
+      'Unable to generate the forecast. Please try again later.';
+
+    if (
+      error instanceof Error &&
+      error.message === 'Authentication failed. Please sign in again.'
+    ) {
+      errorMessage = error.message;
+    } else if (
+      axios.isAxiosError(error) &&
+      !error.response
+    ) {
+      errorMessage =
+        'Unable to connect to the prediction service. Please make sure the backend and prediction service are running, then try again.';
+    } else if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 400
+    ) {
+      errorMessage =
+        'Invalid stock symbol or forecast request. Please check the symbol and try again.';
+    } else if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 500
+    ) {
+      errorMessage =
+        'The prediction service could not generate a forecast for this symbol. Please verify the ticker and try again. If the problem persists, the service may be temporarily unavailable.';
+    }
+
+    setError(errorMessage);
+  } finally {
+
+      setLoading(false);
+    }
+  };
+
+  const handleAddToWatchlist = async () => {
+    const cleanSymbol = symbol.trim().toUpperCase();
+
+    if (!cleanSymbol) {
+      return;
+    }
+
+    setWatchlistLoading(true);
+    setWatchlistMessage(null);
+    setWatchlistMessageType(null);
+
+    try {
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error(
+          'Authentication failed. Please sign in again.'
+        );
+      }
+
+      const result = await addToWatchlist(cleanSymbol, token);
+
+      if (result.alreadyExists) {
+        setWatchlistMessage(
+          `${cleanSymbol} is already in your watchlist.`
+        );
+        setWatchlistMessageType('warning');
+      } else {
+        setWatchlistMessage(
+          `${cleanSymbol} saved to your watchlist.`
+        );
+        setWatchlistMessageType('success');
+      }
     } catch (error: unknown) {
       const errorMessage =
         error instanceof Error
           ? error.message
-          : 'Failed to fetch prediction data. Please try again later.';
+          : 'Failed to add stock to watchlist.';
 
-      setError(errorMessage);
+      setWatchlistMessage(errorMessage);
+      setWatchlistMessageType('error');
     } finally {
-      setLoading(false);
+      setWatchlistLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (autoForecastStarted.current) {
+      return;
+    }
+
+    const querySymbol = searchParams.get('symbol');
+    const queryHorizon = Number(
+      searchParams.get('horizon')
+    );
+
+    if (
+      !querySymbol ||
+      ![7, 14, 30].includes(queryHorizon)
+    ) {
+      return;
+    }
+
+    const cleanSymbol = querySymbol
+      .trim()
+      .toUpperCase();
+
+    autoForecastStarted.current = true;
+
+    setSymbol(cleanSymbol);
+    setHorizon(queryHorizon);
+
+    fetchData(
+      cleanSymbol,
+      queryHorizon
+    );
+  }, []);
 
   const fetchShapExplanation = async () => {
     if (!data) return;
@@ -107,17 +273,26 @@ const Predictions: React.FC = () => {
     setShapExplanationLoading(true);
 
     try {
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error(
+          'Authentication failed. Please sign in again.'
+        );
+      }
+
       const response = await fetch(
-        `${API_BASE_URL}/ml/shap-explanation`,
+        `${API_BASE_URL}/api/ml/shap-explanation`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
             symbol: data.symbol,
             features: data.shap_features,
-            shap_values: data.shap,
+            shap_values: data.shap.map((item) => item.value),
           }),
         }
       );
@@ -217,7 +392,11 @@ const Predictions: React.FC = () => {
             id="symbol-input"
             type="text"
             value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            onChange={(e) => {
+              setSymbol(e.target.value.toUpperCase());
+              setWatchlistMessage(null);
+              setWatchlistMessageType(null);
+            }}
             className="ml-2 p-2 rounded bg-gray-800 text-white border border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="e.g., AXISBANK"
           />
@@ -243,12 +422,36 @@ const Predictions: React.FC = () => {
           </select>
 
           <button
-            onClick={fetchData}
+            onClick={() => fetchData()}
             disabled={loading || !symbol.trim()}
             className="ml-4 px-4 py-2 rounded-lg bg-blue-400 text-white font-semibold hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Running...' : 'Run Forecast'}
           </button>
+
+          <button
+            onClick={handleAddToWatchlist}
+            disabled={watchlistLoading || !symbol.trim()}
+            className="ml-2 px-4 py-2 rounded-lg bg-gray-700 text-white font-semibold hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {watchlistLoading
+              ? 'Adding...'
+              : 'Add to Watchlist'}
+          </button>
+
+          {watchlistMessage && (
+          <p
+            className={`mt-2 text-sm ${
+              watchlistMessageType === 'success'
+                ? 'text-green-400'
+                : watchlistMessageType === 'warning'
+                  ? 'text-yellow-400'
+                  : 'text-red-400'
+            }`}
+          >
+            {watchlistMessage}
+          </p>
+        )}
 
         </div>
 

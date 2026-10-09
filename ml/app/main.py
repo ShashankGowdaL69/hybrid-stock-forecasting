@@ -6,6 +6,7 @@ from .utils.sentiment import compute_sentiment, analyze_text_sentiment
 from .utils.shap_explanation import generate_shap_explanation
 import yfinance as yf
 import logging
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,6 +100,147 @@ async def current_price(symbol: str):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve current price: {str(e)}"
+        )
+
+@app.get("/ml/market-data")
+async def market_data(symbol: str):
+    try:
+        if not symbol or not symbol.strip():
+            raise ValueError("Symbol is required")
+
+        clean_symbol = symbol.strip().upper()
+
+        ticker = yf.Ticker(f"{clean_symbol}.NS")
+
+        history = ticker.history(
+            period="3mo",
+            interval="1d",
+            auto_adjust=False
+        )
+
+        if history.empty or len(history) < 50:
+            raise ValueError(
+                f"Insufficient market data for {clean_symbol}"
+            )
+
+        close_prices = history["Close"].dropna()
+        volumes = history["Volume"].dropna()
+
+        fast_info = ticker.fast_info
+
+        current_price = fast_info.get("lastPrice")
+        previous_close = fast_info.get("previousClose")
+
+        if current_price is None:
+            current_price = float(close_prices.iloc[-1])
+
+        if previous_close is None:
+            previous_close = float(close_prices.iloc[-2])
+
+        current_price = float(current_price)
+        previous_close = float(previous_close)
+
+        latest_row = history.iloc[-1]
+
+        day_high = fast_info.get("dayHigh")
+        day_low = fast_info.get("dayLow")
+        current_volume = fast_info.get("lastVolume")
+
+        if day_high is None:
+            day_high = float(latest_row["High"])
+
+        if day_low is None:
+            day_low = float(latest_row["Low"])
+
+        if current_volume is None:
+            current_volume = float(latest_row["Volume"])
+
+        ma_20 = float(close_prices.rolling(20).mean().iloc[-1])
+        ma_50 = float(close_prices.rolling(50).mean().iloc[-1])
+
+        volume_20_avg = float(
+            volumes.shift(1).rolling(20).mean().iloc[-1]
+        )
+
+        delta = close_prices.diff()
+
+        gains = delta.clip(lower=0)
+        losses = -delta.clip(upper=0)
+
+        average_gain = gains.rolling(14).mean()
+        average_loss = losses.rolling(14).mean()
+
+        rs = average_gain / average_loss.replace(0, pd.NA)
+
+        rsi = 100 - (100 / (1 + rs))
+        rsi_value = float(rsi.iloc[-1])
+
+        change = current_price - previous_close
+        change_percent = (
+            (change / previous_close) * 100
+            if previous_close
+            else 0
+        )
+
+        signal_score = 0
+
+        if current_price > previous_close:
+            signal_score += 1
+        elif current_price < previous_close:
+            signal_score -= 1
+
+        if current_price > ma_20:
+            signal_score += 1
+        elif current_price < ma_20:
+            signal_score -= 1
+
+        if current_price > ma_50:
+            signal_score += 1
+        elif current_price < ma_50:
+            signal_score -= 1
+
+        if rsi_value >= 55:
+            signal_score += 1
+        elif rsi_value <= 45:
+            signal_score -= 1
+
+        if signal_score >= 2:
+            signal = "BULLISH"
+        elif signal_score <= -2:
+            signal = "BEARISH"
+        else:
+            signal = "NEUTRAL"
+
+        return {
+            "symbol": clean_symbol,
+            "current_price": round(current_price, 2),
+            "previous_close": round(previous_close, 2),
+            "change": round(change, 2),
+            "change_percent": round(change_percent, 2),
+            "day_high": round(float(day_high), 2),
+            "day_low": round(float(day_low), 2),
+            "volume": round(float(current_volume), 0),
+            "average_volume_20d": round(volume_20_avg, 0),
+            "ma_20": round(ma_20, 2),
+            "ma_50": round(ma_50, 2),
+            "rsi_14": round(rsi_value, 2),
+            "signal": signal
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Failed to retrieve market data for {symbol}: {str(e)}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve market data: {str(e)}"
         )
 
 @app.post("/ml/predict")

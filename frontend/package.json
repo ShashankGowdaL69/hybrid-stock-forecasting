@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.47.0",
+    "@clerk/ui": "^1.39.1",
     "@tailwindcss/forms": "^0.5.10",
     "autoprefixer": "^10.4.21",
     "axios": "^1.12.2",

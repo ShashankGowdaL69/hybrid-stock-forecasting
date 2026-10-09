@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useAuth } from '@clerk/clerk-react';
 import { motion } from 'framer-motion';
 import { API_BASE_URL } from '../api/api';
 import { Line } from 'react-chartjs-2';
@@ -24,6 +25,8 @@ ChartJS.register(
 );
 
 const SentimentSimulation = () => {
+  const { getToken } = useAuth();
+
   const [symbol, setSymbol] = useState('RELIANCE');
   const [startPrice, setStartPrice] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -51,12 +54,23 @@ const SentimentSimulation = () => {
             return;
             }
 
+            const token = await getToken();
+
+            if (!token) {
+                throw new Error('Authentication required. Please sign in again.');
+            }
+
             const response = await fetch(
-                `${API_BASE_URL}/ml/current-price?symbol=${cleanSymbol}`
+                `${API_BASE_URL}/api/ml/current-price?symbol=${encodeURIComponent(cleanSymbol)}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                }
             );
 
             if (!response.ok) {
-            throw new Error('Failed to fetch current price');
+                throw new Error('Failed to fetch current price');
             }
 
             const data = await response.json();
@@ -96,19 +110,28 @@ const SentimentSimulation = () => {
         try {
             setSentimentLoading(true);
 
+            const token = await getToken();
+
+            if (!token) {
+                throw new Error('Authentication required. Please sign in again.');
+            }
+
             const response = await fetch(
-                `${API_BASE_URL}/ml/sentiment?symbol=${encodeURIComponent(
+                `${API_BASE_URL}/api/ml/sentiment?symbol=${encodeURIComponent(
                     symbol.trim().toUpperCase()
                 )}&text=${encodeURIComponent(
                     sentimentText.trim()
                 )}`,
                 {
                     method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
                 }
             );
 
             if (!response.ok) {
-            throw new Error('Failed to analyze sentiment');
+                throw new Error('Failed to analyze sentiment');
             }
 
             const data = await response.json();
