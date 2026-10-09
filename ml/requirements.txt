@@ -12,3 +12,5 @@ transformers==4.31.0
 torch==2.0.1
 python-dotenv==1.0.1
 shap
+feedparser
+google-genai
