@@ -9,6 +9,7 @@ import {
   SignedOut,
 } from '@clerk/clerk-react';
 import React from 'react';
+import { dark } from '@clerk/ui/themes';
 
 const Header: React.FC = () => {
   return (
@@ -26,13 +27,23 @@ const Header: React.FC = () => {
         <div className="flex items-center gap-3">
 
           <SignedOut>
-            <SignInButton mode="modal">
+            <SignInButton
+              mode="modal"
+              appearance={{
+                baseTheme: dark,
+              }}
+            >
               <button className="px-4 py-2 rounded-lg text-sm text-slate-300 hover:text-white">
                 Sign In
               </button>
             </SignInButton>
 
-            <SignUpButton mode="modal">
+            <SignUpButton
+              mode="modal"
+              appearance={{
+                baseTheme: dark,
+              }}
+            >
               <button className="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-4 py-2 text-sm">
                 Get Started
               </button>
