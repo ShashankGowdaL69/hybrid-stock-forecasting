@@ -103,7 +103,7 @@ async def current_price(symbol: str):
         )
 
 @app.get("/ml/market-data")
-async def market_data(symbol: str):
+def market_data(symbol: str):
     try:
         if not symbol or not symbol.strip():
             raise ValueError("Symbol is required")
