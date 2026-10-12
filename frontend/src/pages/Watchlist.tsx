@@ -29,6 +29,15 @@ interface MarketData {
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
 }
 
+const MARKET_DATA_REFRESH_MS = 60_000;
+
+const marketDataCache: Record<
+  string,
+  { data: MarketData; updatedAt: number }
+> = {};
+
+let lastScheduledRefreshAt = 0;
+
 const Watchlist = () => {
   const { getToken } = useAuth();
   const navigate = useNavigate();
@@ -64,52 +73,92 @@ const Watchlist = () => {
     }
   };
 
-  const loadMarketData = async (symbols: string[]) => {
-    if (symbols.length === 0) {
-      setMarketData({});
-      return;
+  const loadMarketData = async (
+  symbols: string[],
+  forceRefresh = false
+) => {
+  if (symbols.length === 0) {
+    setMarketData({});
+    return;
+  }
+
+  const now = Date.now();
+
+  // Navigation may reuse cache only before the next refresh is due.
+  const canUseCache =
+    !forceRefresh &&
+    lastScheduledRefreshAt > 0 &&
+    now - lastScheduledRefreshAt < MARKET_DATA_REFRESH_MS;
+
+  if (canUseCache) {
+    const cachedData: Record<string, MarketData> = {};
+    let allCached = true;
+
+    for (const symbol of symbols) {
+      const entry = marketDataCache[symbol];
+
+      if (!entry) {
+        allCached = false;
+        break;
+      }
+
+      cachedData[symbol] = entry.data;
     }
 
-    const token = await getToken();
-
-    if (!token) {
+    if (allCached) {
+      setMarketData(cachedData);
       return;
     }
+  }
 
-    setMarketLoading(true);
+  const token = await getToken();
 
-    try {
-      const results = await Promise.all(
-        symbols.map(async (symbol) => {
-          try {
-            const result = await getMarketData(
-              symbol,
-              token
-            );
+  if (!token) {
+    return;
+  }
 
-            return [symbol, result] as [
-              string,
-              MarketData
-            ];
-          } catch {
-            return null;
-          }
-        })
-      );
+  setMarketLoading(true);
 
-      const nextMarketData: Record<string, MarketData> = {};
+  try {
+    const results = await Promise.all(
+      symbols.map(async (symbol) => {
+        try {
+          const result = await getMarketData(symbol, token);
 
-      results.forEach((result) => {
-        if (result) {
-          nextMarketData[result[0]] = result[1];
+          return [symbol, result] as [string, MarketData];
+        } catch {
+          return [symbol, null] as [string, MarketData | null];
         }
-      });
+      })
+    );
 
-      setMarketData(nextMarketData);
-    } finally {
-      setMarketLoading(false);
+    const nextMarketData: Record<string, MarketData> = {};
+
+    results.forEach(([symbol, data]) => {
+      if (data) {
+        nextMarketData[symbol] = data;
+        marketDataCache[symbol] = {
+          data,
+          updatedAt: Date.now(),
+        };
+      } else {
+        const cached = marketDataCache[symbol];
+
+        if (cached) {
+          nextMarketData[symbol] = cached.data;
+        }
+      }
+    });
+
+    setMarketData(nextMarketData);
+
+    if (results.some(([, data]) => data !== null)) {
+      lastScheduledRefreshAt = Date.now();
     }
-  };
+  } finally {
+    setMarketLoading(false);
+  }
+};
 
   useEffect(() => {
     console.log('WATCHLIST: component mounted');
@@ -125,8 +174,9 @@ const Watchlist = () => {
     loadMarketData(watchlist);
 
     const interval = window.setInterval(() => {
-      loadMarketData(watchlist);
-    }, 60000);
+      lastScheduledRefreshAt = Date.now();
+      loadMarketData(watchlist, true);
+    }, MARKET_DATA_REFRESH_MS);
 
     return () => {
       window.clearInterval(interval);

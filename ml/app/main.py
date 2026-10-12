@@ -7,9 +7,16 @@ from .utils.shap_explanation import generate_shap_explanation
 import yfinance as yf
 import logging
 import pandas as pd
+import time
+from copy import deepcopy
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# In-memory prediction cache: 5-minute TTL
+PREDICTION_CACHE_TTL_SECONDS = 300
+_prediction_cache = {}
 
 app = FastAPI(
     title="Hybrid Stock Forecasting API",
@@ -243,10 +250,12 @@ def market_data(symbol: str):
             detail=f"Failed to retrieve market data: {str(e)}"
         )
 
+
 @app.post("/ml/predict")
 async def predict(symbol: str, horizon: int = 30):
     logger.info(
-        f"Processing prediction request for symbol: {symbol}, horizon: {horizon}"
+        f"Processing prediction request for symbol: {symbol}, "
+        f"horizon: {horizon}"
     )
 
     try:
@@ -257,7 +266,49 @@ async def predict(symbol: str, horizon: int = 30):
             raise ValueError("Horizon must be between 1 and 90 days")
 
         clean_symbol = symbol.strip().upper()
+        cache_key = (clean_symbol, horizon)
+        current_time = time.monotonic()
 
+        # Remove expired entries.
+        expired_keys = [
+            key
+            for key, entry in _prediction_cache.items()
+            if current_time >= entry["expires_at"]
+        ]
+
+        for key in expired_keys:
+            del _prediction_cache[key]
+
+        # Return the complete cached response if it is still valid.
+        cached_entry = _prediction_cache.get(cache_key)
+
+        if cached_entry is not None:
+            logger.info(
+                f"Prediction cache HIT for {clean_symbol}, "
+                f"horizon {horizon}"
+            )
+
+            cached_result = deepcopy(cached_entry["result"])
+
+            ticker = yf.Ticker(f"{clean_symbol}.NS")
+            current_price = ticker.fast_info.get("lastPrice")
+
+            if current_price is not None:
+                cached_result["last_price"] = round(
+                    float(current_price), 2
+                )
+
+            await asyncio.sleep(5)
+
+            return cached_result
+
+        logger.info(
+            f"Prediction cache MISS for {clean_symbol}, "
+            f"horizon {horizon}"
+        )
+
+        # Existing pipeline: fetch news, calculate sentiment,
+        # train/validate models, and generate the forecast.
         sentiment = compute_sentiment(clean_symbol)
 
         result = hybrid_predict(
@@ -267,6 +318,19 @@ async def predict(symbol: str, horizon: int = 30):
         )
 
         result["sentiment"] = sentiment
+
+        ticker = yf.Ticker(f"{clean_symbol}.NS")
+        current_price = ticker.fast_info.get("lastPrice")
+
+        if current_price is not None:
+            result["last_price"] = round(float(current_price), 2)
+
+        # Cache only successful results, including sentiment and headlines.
+        _prediction_cache[cache_key] = {
+            "result": deepcopy(result),
+            "expires_at": time.monotonic()
+            + PREDICTION_CACHE_TTL_SECONDS,
+        }
 
         return result
 
@@ -285,6 +349,7 @@ async def predict(symbol: str, horizon: int = 30):
             status_code=500,
             detail=f"Prediction failed: {str(e)}"
         )
+
 
 class ShapExplanationRequest(BaseModel):
     symbol: str
