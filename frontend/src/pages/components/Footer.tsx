@@ -16,11 +16,11 @@ const Footer: React.FC = () => {
           <div className="col-span-1 md:col-span-2">
             <div className="flex items-center mb-4">
               <span className="text-white font-bold text-xl">
-                Hybrid <span className="text-blue-400">Forecasting</span>
+                Hybrid Stock <span className="text-blue-400">Forecasting</span>
               </span>
             </div>
             <p className="text-gray-300 mb-4 max-w-md">
-              Forecast Indian stocks with AI-driven sentiment fusion, predictions, and risk management for informed investments.
+              Educational and research purposes only. Forecasts are estimates and should not be treated as financial advice.
             </p>
             <div className="flex space-x-4">
               {socialLinks.map((link, index) => (

@@ -20,7 +20,7 @@ const Header: React.FC = () => {
 
         <Link to="/">
           <span className="text-white font-semibold text-xl tracking-tight">
-            Hybrid Forecasting
+            Hybrid Stock Forecasting
           </span>
         </Link>
 
@@ -51,11 +51,12 @@ const Header: React.FC = () => {
           </SignedOut>
 
           <SignedIn>
-            <Link to="/dashboard">
-              <button className="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 flex items-center gap-2 transition-colors px-4 py-2 text-sm">
-                <span>Open Dashboard</span>
-                <SparklesIcon className="w-4 h-4" />
-              </button>
+            <Link
+              to="/dashboard"
+              className="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 inline-flex items-center gap-2 transition-colors px-4 py-2 text-sm"
+            >
+              <span>Open Dashboard</span>
+              <SparklesIcon className="w-4 h-4" />
             </Link>
           </SignedIn>
 

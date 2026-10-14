@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
+import type { Dispatch, SetStateAction } from 'react';
 import {
   LayoutDashboard,
   LineChart,
@@ -15,7 +16,7 @@ import { dark } from '@clerk/ui/themes';
 
 interface SideNavProps {
   isOpen: boolean;
-  setIsOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setIsOpen: Dispatch<SetStateAction<boolean>>;
 }
 
 const SideNav: React.FC<SideNavProps> = ({
@@ -93,17 +94,24 @@ const SideNav: React.FC<SideNavProps> = ({
       >
         <div className="p-5 border-b border-slate-800 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Hybrid Forecasting
-            </h1>
+            <NavLink
+              to="/"
+              aria-label="Go to homepage"
+              className="block group"
+            >
+              <h1 className="text-xl font-semibold tracking-tight group-hover:text-slate-300 transition-colors">
+                Hybrid Stock Forecasting
+              </h1>
+            </NavLink>
 
             <p className="text-xs text-slate-500 mt-1">
-              Forecasting Framework
+              Stock Forecasting & Analysis
             </p>
           </div>
 
           <button
             onClick={() => setIsOpen(false)}
+            aria-label="Close navigation menu"
             className="md:hidden text-slate-400 hover:text-white"
           >
             <X size={20} />
